@@ -2,4 +2,4 @@ yfinance==0.1.69
 streamlit==1.12.2
 streamlit==1.12.2
 matplotlib==3.5.0
-statsmodels==0.14.0.dev753+g140f8341d
+statsmodels==0.14.0
