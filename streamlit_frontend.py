@@ -45,7 +45,8 @@ with col3:
     ratio = st.number_input(
         label = "In-Sample Ratio (Expressed as Percentage)",
         min_value = 1,
-        max_value = 100)
+        max_value = 100,
+        value = 70)
     ratio = ratio / 100
 
 col1, col2, col3 = st.columns(3)
