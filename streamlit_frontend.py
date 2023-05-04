@@ -18,11 +18,20 @@ st.set_page_config(
 st.header("Long Short Pair Analyzer")
 st.write("Made by Diego Alvarez")
 
+bad_tickers = {
+    "SPX": "^GSPC",
+    "MOVE": "^MOVE",
+    "VIX": "^VIX",
+    "^DJI": "DJI",
+    "^IXIC": "IXIC",
+    "^RUT": "RUT"}
+
 col1, col2, col3 = st.columns(3)
 
 with col1: 
     st.subheader("Input Data")
-    st.write("SPX has the ticker ^GSPC in Yahoo")
+
+    st.write("All Prices Include Dividends and Stock Splits")
 
 with col2:
     
@@ -49,20 +58,31 @@ with col3:
         value = 70)
     ratio = ratio / 100
 
+@st.cache_data
+def _yf_finance(ticker, start, end):
+
+    return(yf.download(
+        tickers = ticker,
+        start = start,
+        end = end)
+        [["Adj Close"]])
+
 col1, col2, col3 = st.columns(3)
 
 with col1 : 
     
-    long_leg = st.text_input("Long Leg (Ticker)")
+    long_leg = st.text_input("Long Leg (Ticker)").upper()
+    try: long_leg = bad_tickers[long_leg]
+    except: pass
+
     if run_button == "Run":
     
         try:
-            
-            df_long = (yf.download(
-                tickers = long_leg,
+
+            df_long = (_yf_finance(
+                ticker = long_leg,
                 start = start_date,
-                end = end_date)
-                [["Adj Close"]].
+                end = end_date).
                 rename(columns = {"Adj Close": long_leg}))
             
             st.write(df_long.head(5))
@@ -72,16 +92,18 @@ with col1 :
         
 with col2: 
     
-    short_leg = st.text_input("Short Leg")
+    short_leg = st.text_input("Short Leg").upper()
+    try: short_leg = bad_tickers[short_leg]
+    except: pass
+
     if run_button == "Run":
     
         try:
             
-            df_short = (yf.download(
-                tickers = short_leg,
+            df_short = (_yf_finance(
+                ticker = short_leg,
                 start = start_date,
-                end = end_date)
-                [["Adj Close"]].
+                end = end_date).
                 rename(columns = {"Adj Close": short_leg}))
             
             st.write(df_short.head(5))
@@ -91,15 +113,17 @@ with col2:
     
 with col3: 
     
-    benchmark_leg = st.text_input("Benchmark")
+    benchmark_leg = st.text_input("Benchmark").upper()
+    try: benchmark_leg = bad_tickers[benchmark_leg]
+    except: pass
+
     if run_button == "Run":
     
         try:
-            df_benchmark = (yf.download(
-                tickers = benchmark_leg,
+            df_benchmark = (_yf_finance(
+                ticker = benchmark_leg,
                 start = start_date,
-                end = end_date)
-                [["Adj Close"]].
+                end = end_date).
                 rename(columns = {"Adj Close": benchmark_leg}))
             
             st.write(df_benchmark.head(5))
@@ -137,7 +161,7 @@ if run_button == "Run":
         
     sidebar_options = st.sidebar.selectbox(
         label = "Options",
-        options = ["Regression Results", "Individual Premias", "Even Rebalance"])
+        options = ["Regression Results", "Individual Premias", "Even Rebalance", "Rolling OLS"])
     
     if sidebar_options == "Regression Results":
         
@@ -216,6 +240,172 @@ if run_button == "Run":
         st.subheader("Rebelanced 50/50 Daily (Not Include Transaction Costs)")
         st.pyplot(ls_pair.generate_even_rebal_risk_premia())
             
-            
+    if sidebar_options == "Rolling OLS":
+
+        rolling_ols_options = st.sidebar.selectbox(
+            label = "Rolling OLS options",
+            options = [
+            "Rolling Plot", "Long / Short Parameter Comparison", 
+            "Rolling Parameter Correlation", "Parameter Distribution",
+            "Rolling Distribution Contour Map"])
+        
+        if rolling_ols_options == "Rolling Plot":
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+
+                window_input = st.number_input(
+                    label = "Window size",
+                    min_value = 1,
+                    max_value = 252 * 10,
+                    value = 30)
+                
+                confidence_input = st.number_input(
+                    label = "Confidence Interval (As Percentage)",
+                    min_value = 1,
+                    max_value = 100,
+                    value = 95)
+                
+                confidence_input = round(1 - (confidence_input / 100), 2)
+
+                ols_run_button = st.radio(
+                    label = "Click Run to start",
+                    options = ["Stop", "Run"])
+                
+            with col2:
+
+                for i in range(11):
+                    st.write(" ")
+
+                fill_button = st.radio(
+                    label = "Confidence Interval Fill",
+                    options = ["Fill", "No Fill"])
+
+            if ols_run_button == "Run":
+
+                if fill_button == "Fill":
+
+                    st.pyplot(ls_pair.plot_single_rolling_ols(
+                        window = window_input,
+                        conf_int = confidence_input))
+                
+                if fill_button == "No Fill":
+
+                    st.pyplot(ls_pair.plot_single_rolling_ols(
+                        window = window_input,
+                        fill = False))
     
-            
+        if rolling_ols_options == "Long / Short Parameter Comparison":
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+
+                window_input = st.number_input(
+                        label = "Window size",
+                        min_value = 1,
+                        max_value = 252 * 10,
+                        value = 30)
+                    
+                confidence_input = st.number_input(
+                    label = "Confidence Interval (As Percentage)",
+                    min_value = 1,
+                    max_value = 100,
+                    value = 95)
+                
+                confidence_input = (100 - confidence_input) / 100
+                
+                ols_run_button = st.radio(
+                    label = "Click Run to start",
+                    options = ["Stop", "Run"])
+                
+            with col2:
+
+                for i in range(11):
+                    st.write(" ")
+
+                fill_button = st.radio(
+                    label = "Confidence Interval Fill",
+                    options = ["Fill", "No Fill"])
+                
+            if ols_run_button == "Run":
+
+                if fill_button == "Fill":
+
+                    st.pyplot(ls_pair.plot_single_rolling_ols_comparison(
+                        window = window_input,
+                        conf_int = confidence_input))
+                    
+                if fill_button == "No Fill":
+
+                    st.pyplot(ls_pair.plot_single_rolling_ols_comparison(
+                        window = window_input))
+                    
+        if rolling_ols_options == "Rolling Parameter Correlation":
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+
+                ols_window_input = st.number_input(
+                    label = "OLS Window size",
+                    min_value = 1,
+                    max_value = 252 * 10,
+                    value = 30)
+                
+                run_button = st.radio(
+                    label = "Click Run to start",
+                    options = ["Stop", "Run"])
+                
+            with col2: 
+
+                corr_window_input = st.number_input(
+                    label = "Correlation Window size",
+                    min_value = 1,
+                    max_value = 252 * 10,
+                    value = 30)
+                
+            if run_button == "Run":
+
+                st.pyplot(ls_pair.plot_single_rolling_ols_parameter_comparison(
+                    ols_window = ols_window_input,
+                    corr_window = corr_window_input))
+
+        if rolling_ols_options == "Parameter Distribution":
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+
+                ols_window_input = st.number_input(
+                    label = "OLS Window size",
+                    min_value = 1,
+                    max_value = 252 * 10,
+                    value = 30)
+                
+                run_button = st.radio(
+                    label = "Click Run to start",
+                    options = ["Stop", "Run"])
+                
+            if run_button == "Run":
+
+                st.pyplot(ls_pair.plot_single_rolling_ols_hist(
+                    ols_window = ols_window_input))
+                
+        if rolling_ols_options == "Rolling Distribution Contour Map":
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+
+                ols_window_input = st.number_input(
+                    label = "OLS Window size",
+                    min_value = 1,
+                    max_value = 252 * 10,
+                    value = 30)
+                
+                run_button = st.radio(
+                    label = "Click Run to start",
+                    options = ["Stop", "Run"])
+                
+            if run_button == "Run":
+
+                st.pyplot(ls_pair.plot_single_rolling_ols_contour(
+                    ols_window = ols_window_input))
