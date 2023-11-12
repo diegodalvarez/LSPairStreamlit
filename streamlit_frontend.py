@@ -5,18 +5,73 @@ Created on Thu Apr 27 19:58:00 2023
 @author: Diego
 """
 
+import altair as alt
 import datetime as dt
 import yfinance as yf
 import streamlit as st
 
-from LSPairStreamlit import *
+from LSPort import *
 
 st.set_page_config(
-    page_title = "L/S Pair Analyzer",
+    page_title = "L/S Pair Analyzer & Backtesting",
     layout = "wide")
 
-st.header("Long Short Pair Analyzer")
+st.header("L/S Pair Analyzer & Backtesting")
 st.write("Made by Diego Alvarez")
+
+# helper functions
+def bus_day_subtract(date_input):
+
+    if dt.date.weekday(date_input) == 6: date_out = date_input - dt.timedelta(days = 6)
+    if dt.date.weekday(date_input) == 5: date_out = date_input - dt.timedelta(days =  5)
+    else: date_out = date_input - dt.timedelta(days = 7)
+
+    return date_out
+
+# cache functions
+@st.cache_data
+def _yf_finance(ticker, start, end):
+
+    return(yf.download(
+        tickers = ticker,
+        start = start,
+        end = end)
+        [["Adj Close"]])
+
+# parametrized function on the call-side so that the data is cached
+@st.cache_data
+def position_rebalance(
+    _ls_port_obj,
+    lookback_window: int,
+    rebalance_method: str,
+    backtest_start_date: dt.date,
+    backtest_end_date: dt.date):
+
+    df_position, df_port = _ls_port_obj.position_rebalance(
+        lookback_window = lookback_window,
+        rebalance_method = "daily",
+        backtest_start_date = backtest_start_date,
+        backtest_end_date = backtest_end_date)
+    
+    return(df_position, df_port)
+
+@st.cache_data
+def plot_position_rebalance(
+    _ls_port_obj,
+    df_position: pd.DataFrame,
+    df_port: pd.DataFrame,
+    lookback_window: int,
+    rebalance_method: str,
+    figsize: tuple = (28,6)):
+
+    fig_weighted, fig_port = _ls_port_obj._plot_position_rebalance(
+        df_position = df_position,
+        df_port = df_port,
+        lookback_window = lookback_window,
+        rebalance_method = rebalance_method,
+        figsize = figsize)
+    
+    return fig_weighted, fig_port
 
 bad_tickers = {
     "SPX": "^GSPC",
@@ -50,22 +105,6 @@ with col3:
     run_button = st.radio(
         label = "Select Run to extract data",
         options = ["Stop", "Run"])
-    
-    ratio = st.number_input(
-        label = "In-Sample Ratio (Expressed as Percentage)",
-        min_value = 1,
-        max_value = 100,
-        value = 70)
-    ratio = ratio / 100
-
-@st.cache_data
-def _yf_finance(ticker, start, end):
-
-    return(yf.download(
-        tickers = ticker,
-        start = start,
-        end = end)
-        [["Adj Close"]])
 
 col1, col2, col3 = st.columns(3)
 
@@ -130,9 +169,9 @@ with col3:
             
         except: 
             st.write("There was a problem collecting the data from Yahoo")
-            
+
 if run_button == "Run":
-    
+
     df_input_full = (df_long.reset_index().merge(
         df_short.reset_index(),
         how = "outer",
@@ -141,8 +180,25 @@ if run_button == "Run":
             df_benchmark.reset_index(),
             how = "outer",
             on = ["Date"]).
-        set_index("Date").
-        pct_change())
+        set_index("Date"))
+    
+    st.write("Historical Returns from {} to {}".format(
+        df_input_full.index.min().date(),
+        df_input_full.index.max().date()))
+    
+    cum_rtns = ((np.cumprod(df_input_full.pct_change() + 1) - 1) * 100).reset_index().melt(id_vars = "Date")
+    cum_rtn_chart = (alt.Chart(
+        data = cum_rtns).
+        mark_line().
+        encode(
+            x = "Date",
+            y = alt.Y(shorthand = "value", title = "Cumulative Returns (%)"),
+            color = "variable").
+        properties(
+            width = 1_000,
+            height = 400))
+    
+    st.altair_chart(cum_rtn_chart)
     
     df_input_drop = df_input_full.dropna()
     if len(df_input_drop) != len(df_input_full):
@@ -152,260 +208,242 @@ if run_button == "Run":
         
     else:
         df_input = df_input_full
-        
-    ls_pair = LSPairStreamlit(
-        long_position = df_input[df_input.columns[0]],
-        short_position = df_input[df_input.columns[1]],
-        benchmark = df_input[df_input.columns[2]],
-        in_sample_ratio = ratio)
-        
+
+    ls_port = LSPort(
+        long_position = df_input_full[long_leg],
+        short_position = df_input_full[short_leg],
+        benchmark = df_input_full[benchmark_leg])
+    
     sidebar_options = st.sidebar.selectbox(
         label = "Options",
-        options = ["Regression Results", "Individual Premias", "Even Rebalance", "Rolling OLS"])
+        options = ["backtest"])
     
-    if sidebar_options == "Regression Results":
-        
-        sample_set_options = st.sidebar.selectbox(
-            label = "Sample Set", 
-            options = ["In-Sample", "Out-of-Sample", "Full-Sample", "All"])
-        
-        if sample_set_options == "In-Sample":
-            
-            col1, col2 = st.columns(2)
-            with col1:st.write(ls_pair.in_sample_long_lm_res)
-            with col2:st.write(ls_pair.in_sample_short_lm_res)
-            st.pyplot(ls_pair.plot_regress())
-            
-        if sample_set_options == "Out-of-Sample":
-            
-            col1, col2 = st.columns(2)
-            with col1: st.write(ls_pair.out_sample_long_lm_res)
-            with col2: st.write(ls_pair.out_sample_short_lm_res)
-            st.pyplot(ls_pair.plot_out_regress())
-            
-        if sample_set_options == "Full-Sample":
-            
-            col1, col2 = st.columns(2)
-            with col1: st.write(ls_pair.full_sample_long_lm_res)
-            with col2: st.write(ls_pair.full_sample_short_lm_res)
-            st.pyplot(ls_pair.plot_full_regress())
-            
-            
-        if sample_set_options == "All":
-            
-            st.subheader("In-Sample")
-            col1, col2 = st.columns(2)
-            with col1:st.write(ls_pair.in_sample_long_lm_res)
-            with col2:st.write(ls_pair.in_sample_short_lm_res)
-            st.pyplot(ls_pair.plot_regress())
-            
-            st.subheader("Out-of-Sample")
-            col1, col2 = st.columns(2)
-            with col1: st.write(ls_pair.out_sample_long_lm_res)
-            with col2: st.write(ls_pair.out_sample_short_lm_res)
-            st.pyplot(ls_pair.plot_out_regress())
-            
-            st.subheader("Full-Sample")
-            col1, col2 = st.columns(2)
-            with col1: st.write(ls_pair.full_sample_long_lm_res)
-            with col2: st.write(ls_pair.full_sample_short_lm_res)
-            st.pyplot(ls_pair.plot_full_regress())
-            
-    if sidebar_options == "Individual Premias":
-        
-        sample_set_options = st.sidebar.selectbox(
-            label = "Sample Set", 
-            options = ["In-Sample", "Out-of-Sample", "Full-Sample", "All"])
-        
-        if sample_set_options == "In-Sample":
-            st.pyplot(ls_pair.plot_cum())
-            
-        if sample_set_options == "Out-of-Sample":
-            st.pyplot(ls_pair.plot_out_sample_cum())
+    col1, col2, col3 = st.columns(3)
+    if sidebar_options == "backtest":
 
-        if sample_set_options == "Full-Sample":
-            st.pyplot(ls_pair.plot_full_sample_cum())
+        plotting_options = st.sidebar.selectbox(
+            label = "Plotting Option",
+            options = ["MatplotLib", "Streamlit"])
+
+        with col1:
+
+            rebalance_period = st.selectbox(
+                label = "rebalance",
+                options = ["daily"])
             
-        if sample_set_options == "All":
+            lookback_window = st.number_input(
+                label = "Rolling Beta Window",
+                min_value = 1,
+                max_value = 365 * 2,
+                value = 120)
             
-            st.subheader("In-Sample")
-            st.pyplot(ls_pair.plot_cum())
-            st.subheader("Out-of-Sample")
-            st.pyplot(ls_pair.plot_out_sample_cum())
-            st.subheader("Full-Sample")
-            st.pyplot(ls_pair.plot_full_sample_cum())
-            
-    if sidebar_options == "Even Rebalance":
-        
-        st.subheader("Rebelanced 50/50 Daily (Not Include Transaction Costs)")
-        st.pyplot(ls_pair.generate_even_rebal_risk_premia())
-            
-    if sidebar_options == "Rolling OLS":
+        with col2:
 
-        rolling_ols_options = st.sidebar.selectbox(
-            label = "Rolling OLS options",
-            options = [
-            "Rolling Plot", "Long / Short Parameter Comparison", 
-            "Rolling Parameter Correlation", "Parameter Distribution",
-            "Rolling Distribution Contour Map"])
-        
-        if rolling_ols_options == "Rolling Plot":
+            min_value = df_benchmark.index.min() + dt.timedelta(days = lookback_window)
+            max_value = df_benchmark.index.max()
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-
-                window_input = st.number_input(
-                    label = "Window size",
-                    min_value = 1,
-                    max_value = 252 * 10,
-                    value = 30)
-                
-                confidence_input = st.number_input(
-                    label = "Confidence Interval (As Percentage)",
-                    min_value = 1,
-                    max_value = 100,
-                    value = 95)
-                
-                confidence_input = round(1 - (confidence_input / 100), 2)
-
-                ols_run_button = st.radio(
-                    label = "Click Run to start",
-                    options = ["Stop", "Run"])
-                
-            with col2:
-
-                for i in range(11):
-                    st.write(" ")
-
-                fill_button = st.radio(
-                    label = "Confidence Interval Fill",
-                    options = ["Fill", "No Fill"])
-
-            if ols_run_button == "Run":
-
-                if fill_button == "Fill":
-
-                    st.pyplot(ls_pair.plot_single_rolling_ols(
-                        window = window_input,
-                        conf_int = confidence_input))
-                
-                if fill_button == "No Fill":
-
-                    st.pyplot(ls_pair.plot_single_rolling_ols(
-                        window = window_input,
-                        fill = False))
+            backtest_start_date = st.date_input(
+                label = "Backtest Start Date",
+                value = min_value,
+                min_value = min_value,
+                max_value = max_value)
     
-        if rolling_ols_options == "Long / Short Parameter Comparison":
+            backtest_end_date = st.date_input(
+                label = "Backtest End Date",
+                value = max_value,
+                min_value = min_value,
+                max_value = max_value)
+            
+            if backtest_start_date > backtest_end_date: st.write("Start Date Needs to be before End Date")       
 
-            col1, col2, col3 = st.columns(3)
+        with col3:
 
-            with col1:
+            backtest_run_button = st.radio(
+                label = "Run Button",
+                options = ["Stop", "Run"])
+            
+        if backtest_run_button == "Run":
 
-                window_input = st.number_input(
-                        label = "Window size",
-                        min_value = 1,
-                        max_value = 252 * 10,
-                        value = 30)
+            df_position, df_port = position_rebalance(
+                _ls_port_obj = ls_port,
+                lookback_window = lookback_window,
+                rebalance_method = rebalance_period,
+                backtest_start_date = backtest_start_date,
+                backtest_end_date = backtest_end_date)
+            
+            if plotting_options == "MatplotLib":
+                
+                fig_weighted, fig_port = plot_position_rebalance(
+                        _ls_port_obj = ls_port,
+                        df_position = df_position,
+                        df_port = df_port,
+                        lookback_window = lookback_window,
+                        rebalance_method = rebalance_period)
+                
+                st.pyplot(fig_weighted)
+                st.pyplot(fig_port)
+
+            if plotting_options == "Streamlit":
+
+                st.subheader("Long: {} Short: {} Benchmark: {} {} rolling OLS rebalance: {} from {} to {}".format(
+                    ls_port.long_name,
+                    ls_port.short_name,
+                    ls_port.benchmark_name,
+                    lookback_window,
+                    rebalance_period,
+                    df_position.Date.min().date(),
+                    df_position.Date.max().date()))
+                
+                plot_col1, plot_col2 = st.columns(2)
+
+                with plot_col1:
+
+                    df_tmp = (df_position.query(
+                        "position == 'long'")
+                        [["Date", "lag_weight"]].
+                        assign(
+                            lag_weight = lambda x: x.lag_weight * 100,
+                            short = lambda x: 100 - x.lag_weight).
+                        rename(columns = {
+                            "lag_weight": ls_port.long_name,
+                            "short": ls_port.short_name}).
+                        dropna().
+                        melt(id_vars = "Date", var_name = "position", value_name = "weight"))
+                
+                    plot = (alt.Chart(
+                        data = df_tmp).
+                        mark_area().
+                        encode(
+                            x = "Date",
+                            y = alt.Y(
+                                shorthand = "weight", 
+                                title = "Weighting (%)",
+                                scale = alt.Scale(domain = [0,100])),
+                            color = "position").
+                        properties(
+                            width = 700,
+                            height = 300))
                     
-                confidence_input = st.number_input(
-                    label = "Confidence Interval (As Percentage)",
-                    min_value = 1,
-                    max_value = 100,
-                    value = 95)
-                
-                confidence_input = (100 - confidence_input) / 100
-                
-                ols_run_button = st.radio(
-                    label = "Click Run to start",
-                    options = ["Stop", "Run"])
-                
-            with col2:
+                    st.write("Portfolio Weighting")
+                    st.altair_chart(plot)
 
-                for i in range(11):
-                    st.write(" ")
+                with plot_col2:
 
-                fill_button = st.radio(
-                    label = "Confidence Interval Fill",
-                    options = ["Fill", "No Fill"])
-                
-            if ols_run_button == "Run":
-
-                if fill_button == "Fill":
-
-                    st.pyplot(ls_pair.plot_single_rolling_ols_comparison(
-                        window = window_input,
-                        conf_int = confidence_input))
+                    df_beta = (df_position.query(
+                        "position == ['long', 'short']")
+                        [["Date", "position", "weighted_directional_beta"]].
+                        pivot(index = "Date", columns = "position", values = "weighted_directional_beta").
+                        reset_index())
                     
-                if fill_button == "No Fill":
-
-                    st.pyplot(ls_pair.plot_single_rolling_ols_comparison(
-                        window = window_input))
+                    line_chart1 = (alt.Chart(
+                        data = df_beta).
+                        mark_line().
+                        encode(
+                            x = "Date",
+                            color = alt.value("#ff0000"),
+                            y = alt.Y(
+                                shorthand = "long",
+                                title = "Long β",
+                                scale = alt.Scale(domain = [
+                                    df_beta["long"].min(),
+                                    df_beta["long"].max()]))))
                     
-        if rolling_ols_options == "Rolling Parameter Correlation":
+                    line_chart2 = (alt.Chart(
+                        data = df_beta).
+                        mark_line().
+                        encode(
+                            x = "Date",
+                            y = alt.Y(
+                                shorthand = "short",
+                                title = "Short β", 
+                                scale = alt.Scale(
+                                    reverse = True,
+                                    domain = [
+                                        df_beta["short"].min(),
+                                        df_beta["short"].max()]))))
+                    
+                    combined_chart = (alt.layer(
+                        line_chart1, line_chart2).
+                        resolve_scale(y = "independent").
+                        properties(
+                            width = 700,
+                            height = 300))
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
+                    st.write("Weighted Beta Matching")
+                    st.altair_chart(combined_chart)
 
-                ols_window_input = st.number_input(
-                    label = "OLS Window size",
-                    min_value = 1,
-                    max_value = 252 * 10,
-                    value = 30)
-                
-                run_button = st.radio(
-                    label = "Click Run to start",
-                    options = ["Stop", "Run"])
-                
-            with col2: 
+                plot_col3, plot_col4, plot_col5 = st.columns(spec = 3)
 
-                corr_window_input = st.number_input(
-                    label = "Correlation Window size",
-                    min_value = 1,
-                    max_value = 252 * 10,
-                    value = 30)
-                
-            if run_button == "Run":
+                with plot_col3:
 
-                st.pyplot(ls_pair.plot_single_rolling_ols_parameter_comparison(
-                    ols_window = ols_window_input,
-                    corr_window = corr_window_input))
+                    df_port_beta = (df_position[
+                        ["Date", "ticker", "weighted_directional_beta"]].
+                        pivot(index = "Date", columns = "ticker", values = "weighted_directional_beta").
+                        sum(axis = 1).
+                        to_frame().
+                        rename(columns = {0: "Beta"}).
+                        reset_index())
+                    
+                    st.write("Portfolio Beta")
+                    beta_chart = (alt.Chart(
+                        data = df_port_beta).
+                        mark_line().
+                        encode(
+                            x = "Date",
+                            y = alt.Y(
+                                shorthand = "Beta",
+                                title = "Beta",
+                                scale = alt.Scale(domain = [
+                                    df_port_beta["Beta"].min(),
+                                    df_port_beta["Beta"].max()]))).
+                        properties(
+                            width = 450,
+                            height = 300))
+                    
+                    st.altair_chart(beta_chart)
 
-        if rolling_ols_options == "Parameter Distribution":
+                with plot_col4:
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
+                    position_cum_plot = (alt.Chart(
+                        data = df_position.rename(columns = {"cum_rtn": "Cumulative Return"})).
+                        mark_line().
+                        encode(
+                            x = "Date",
+                            y = "Cumulative Return",
+                            color = "ticker").
+                        properties(
+                            width = 450,
+                            height = 300))
+                    
+                    st.write("Individual Position Performance")
+                    st.altair_chart(position_cum_plot)
 
-                ols_window_input = st.number_input(
-                    label = "OLS Window size",
-                    min_value = 1,
-                    max_value = 252 * 10,
-                    value = 30)
-                
-                run_button = st.radio(
-                    label = "Click Run to start",
-                    options = ["Stop", "Run"])
-                
-            if run_button == "Run":
+                with plot_col5:
 
-                st.pyplot(ls_pair.plot_single_rolling_ols_hist(
-                    ols_window = ols_window_input))
-                
-        if rolling_ols_options == "Rolling Distribution Contour Map":
+                    df_direction = (pd.DataFrame({
+                        "position": ["long", "short"],
+                        "direction": [1, -1]}))
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-
-                ols_window_input = st.number_input(
-                    label = "OLS Window size",
-                    min_value = 1,
-                    max_value = 252 * 10,
-                    value = 30)
-                
-                run_button = st.radio(
-                    label = "Click Run to start",
-                    options = ["Stop", "Run"])
-                
-            if run_button == "Run":
-
-                st.pyplot(ls_pair.plot_single_rolling_ols_contour(
-                    ols_window = ols_window_input))
+                    df_port_rtns = (df_position[
+                        ["Date", "ticker", "weighted_rtn", "position"]].
+                        merge(right = df_direction, how = "inner", on = ["position"]).
+                        assign(weighted_rtn = lambda x: x.weighted_rtn * x.direction).
+                        drop(columns = ["position"]).
+                        pivot(index = "Date", columns = "ticker", values = "weighted_rtn").
+                        sum(axis = 1).
+                        to_frame().
+                        rename(columns = {0: "Cumulative Return (%)"}))
+                    
+                    df_port_cum_rtn = ((np.cumprod(1 + df_port_rtns) - 1) * 100).reset_index()
+                    cum_plot = (alt.Chart(
+                        data = df_port_cum_rtn).
+                        mark_line().
+                        encode(
+                            x = "Date",
+                            y = "Cumulative Return (%)").
+                        properties(
+                            width = 450,
+                            height = 300))
+                    
+                    st.write("Portfolio Performance")
+                    st.altair_chart(cum_plot)
